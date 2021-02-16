@@ -35,7 +35,7 @@
 #include "mem.h"
 #include "proc.h"
 
-struct flb_input_plugin in_mem_plugin;
+struct flb_input_plugin in_mem2_plugin;
 
 static int in_mem_collect(struct flb_input_instance *i_ins,
                           struct flb_config *config, void *in_context);
@@ -277,8 +277,8 @@ static int in_mem_exit(void *data, struct flb_config *config)
     return 0;
 }
 
-struct flb_input_plugin in_mem_plugin = {
-    .name         = "mem",
+struct flb_input_plugin in_mem2_plugin = {
+    .name         = "mem2",
     .description  = "Memory Usage",
     .cb_init      = in_mem_init,
     .cb_pre_run   = NULL,
