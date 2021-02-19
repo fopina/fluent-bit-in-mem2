@@ -1,4 +1,4 @@
-# fluent-bit-out-influxdb-v2
+# fluent-bit-in-mem2
 
 Core [in_mem](https://github.com/fluent/fluent-bit/tree/master/plugins/in_mem) modified to include MemAvailable (from /proc/meminfo)
 
