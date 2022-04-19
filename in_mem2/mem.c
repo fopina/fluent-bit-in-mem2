@@ -133,7 +133,13 @@ static int mem_calc(struct flb_in_mem_info *m_info)
 
     /* set values in KBs */
     m_info->mem_total     = calc_kb(info.totalram, info.mem_unit);
+
+    /*
+     * This value seems to be MemAvailable if it is supported
+     * or MemFree on legacy Linux.
+     */
     m_info->mem_free      = calc_kb(info.freeram, info.mem_unit);
+
     m_info->mem_used      = m_info->mem_total - m_info->mem_free;
     m_info->mem_buffer    = calc_kb(info.bufferram, info.mem_unit);
     m_info->mem_cache     = G.cached_kb + G.reclaimable_kb;
