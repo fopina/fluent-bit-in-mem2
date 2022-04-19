@@ -2,8 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2019-2020 The Fluent Bit Authors
- *  Copyright (C) 2015-2018 Treasure Data Inc.
+ *  Copyright (C) 2015-2022 The Fluent Bit Authors
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -34,9 +33,13 @@
 
 #include "mem.h"
 #include "proc.h"
-#include "bbfree.h"
 
 struct flb_input_plugin in_mem2_plugin;
+
+struct meminfo {
+	unsigned mem_unit;
+	unsigned long cached_kb, available_kb, reclaimable_kb;
+};
 
 static int in_mem_collect(struct flb_input_instance *i_ins,
                           struct flb_config *config, void *in_context);
@@ -88,10 +91,36 @@ static uint64_t calc_kb(unsigned long amount, unsigned int unit)
     return (uint64_t) bytes;
 }
 
+static int parse_meminfo(struct meminfo *g)
+{
+	char buf[60]; /* actual lines we expect are ~30 chars or less */
+	FILE *fp;
+	int seen_cached_and_available_and_reclaimable;
+
+	fp = fopen("/proc/meminfo", "r");
+	g->cached_kb = g->available_kb = g->reclaimable_kb = 0;
+	seen_cached_and_available_and_reclaimable = 3;
+	while (fgets(buf, sizeof(buf), fp)) {
+		if (sscanf(buf, "Cached: %lu %*s\n", &g->cached_kb) == 1)
+			if (--seen_cached_and_available_and_reclaimable == 0)
+				break;
+		if (sscanf(buf, "MemAvailable: %lu %*s\n", &g->available_kb) == 1)
+			if (--seen_cached_and_available_and_reclaimable == 0)
+				break;
+		if (sscanf(buf, "SReclaimable: %lu %*s\n", &g->reclaimable_kb) == 1)
+			if (--seen_cached_and_available_and_reclaimable == 0)
+				break;
+	}
+	/* Have to close because of NOFORK */
+	fclose(fp);
+
+	return seen_cached_and_available_and_reclaimable == 0;
+}
+
 static int mem_calc(struct flb_in_mem_info *m_info)
 {
     int ret;
-    struct globals G;
+    struct meminfo G;
     struct sysinfo info;
 
     ret = sysinfo(&info);
@@ -100,7 +129,6 @@ static int mem_calc(struct flb_in_mem_info *m_info)
         return -1;
     }
 
-    // code from busybox - https://github.com/mirror/busybox/blob/2cd37d65e221f7267e97360d21f55a2318b25355/procps/free.c#L121
     ret = parse_meminfo(&G);
 
     /* set values in KBs */
@@ -130,10 +158,8 @@ static int in_mem_init(struct flb_input_instance *in,
                        struct flb_config *config, void *data)
 {
     int ret;
-    const char *tmp;
     struct flb_in_mem_config *ctx;
     (void) data;
-    const char *pval = NULL;
 
     /* Initialize context */
     ctx = flb_malloc(sizeof(struct flb_in_mem_config));
@@ -144,21 +170,20 @@ static int in_mem_init(struct flb_input_instance *in,
     ctx->pid = 0;
     ctx->page_size = sysconf(_SC_PAGESIZE);
     ctx->ins = in;
+    
+    /* Load the config map */
+    ret = flb_input_config_map_set(in, (void *)ctx);
+    if (ret == -1) {
+        flb_free(ctx);
+        return -1;
+    }
 
     /* Collection time setting */
-    pval = flb_input_get_property("interval_sec", in);
-    if (pval != NULL && atoi(pval) > 0) {
-        ctx->interval_sec = atoi(pval);
+    if (ctx->interval_sec <= 0) {
+        ctx->interval_sec = atoi(DEFAULT_INTERVAL_SEC);
     }
-    else {
-        ctx->interval_sec = DEFAULT_INTERVAL_SEC;
-    }
-    ctx->interval_nsec = DEFAULT_INTERVAL_NSEC;
-
-    /* Check if the caller want's to trace a specific Process ID */
-    tmp = flb_input_get_property("pid", in);
-    if (tmp) {
-        ctx->pid = atoi(tmp);
+    if (ctx->interval_nsec <= 0) {
+        ctx->interval_nsec = atoi(DEFAULT_INTERVAL_NSEC);
     }
 
     /* Set the context */
@@ -172,6 +197,7 @@ static int in_mem_init(struct flb_input_instance *in,
                                        config);
     if (ret == -1) {
         flb_plg_error(ctx->ins, "could not set collector for memory input plugin");
+        return -1;
     }
 
     return 0;
@@ -299,6 +325,26 @@ static int in_mem_exit(void *data, struct flb_config *config)
     return 0;
 }
 
+static struct flb_config_map config_map[] = {
+    {
+      FLB_CONFIG_MAP_INT, "interval_sec", DEFAULT_INTERVAL_SEC,
+      0, FLB_TRUE, offsetof(struct flb_in_mem_config, interval_sec),
+      "Set the collector interval"
+    },
+    {
+      FLB_CONFIG_MAP_INT, "interval_nsec", DEFAULT_INTERVAL_NSEC,
+      0, FLB_TRUE, offsetof(struct flb_in_mem_config, interval_nsec),
+      "Set the collector interval (subseconds)"
+    },
+    {
+      FLB_CONFIG_MAP_INT, "pid", "0",
+      0, FLB_TRUE, offsetof(struct flb_in_mem_config, pid),
+      "Set the PID of the process to measure"
+    },
+    /* EOF */
+    {0}
+};
+
 struct flb_input_plugin in_mem2_plugin = {
     .name         = "mem2",
     .description  = "Memory Usage",
@@ -306,5 +352,6 @@ struct flb_input_plugin in_mem2_plugin = {
     .cb_pre_run   = NULL,
     .cb_collect   = in_mem_collect,
     .cb_flush_buf = NULL,
-    .cb_exit      = in_mem_exit
+    .cb_exit      = in_mem_exit,
+    .config_map   = config_map
 };
