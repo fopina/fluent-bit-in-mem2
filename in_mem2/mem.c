@@ -37,6 +37,11 @@
 
 struct flb_input_plugin in_mem2_plugin;
 
+struct meminfo {
+	unsigned mem_unit;
+	unsigned long cached_kb, available_kb, reclaimable_kb;
+};
+
 static int in_mem_collect(struct flb_input_instance *i_ins,
                           struct flb_config *config, void *in_context);
 #if 0
@@ -87,9 +92,36 @@ static uint64_t calc_kb(unsigned long amount, unsigned int unit)
     return (uint64_t) bytes;
 }
 
+static int parse_meminfo(struct meminfo *g)
+{
+	char buf[60]; /* actual lines we expect are ~30 chars or less */
+	FILE *fp;
+	int seen_cached_and_available_and_reclaimable;
+
+	fp = fopen("/proc/meminfo", "r");
+	g->cached_kb = g->available_kb = g->reclaimable_kb = 0;
+	seen_cached_and_available_and_reclaimable = 3;
+	while (fgets(buf, sizeof(buf), fp)) {
+		if (sscanf(buf, "Cached: %lu %*s\n", &g->cached_kb) == 1)
+			if (--seen_cached_and_available_and_reclaimable == 0)
+				break;
+		if (sscanf(buf, "MemAvailable: %lu %*s\n", &g->available_kb) == 1)
+			if (--seen_cached_and_available_and_reclaimable == 0)
+				break;
+		if (sscanf(buf, "SReclaimable: %lu %*s\n", &g->reclaimable_kb) == 1)
+			if (--seen_cached_and_available_and_reclaimable == 0)
+				break;
+	}
+	/* Have to close because of NOFORK */
+	fclose(fp);
+
+	return seen_cached_and_available_and_reclaimable == 0;
+}
+
 static int mem_calc(struct flb_in_mem_info *m_info)
 {
     int ret;
+    struct meminfo G;
     struct sysinfo info;
 
     ret = sysinfo(&info);
@@ -97,6 +129,8 @@ static int mem_calc(struct flb_in_mem_info *m_info)
         flb_errno();
         return -1;
     }
+
+    ret = parse_meminfo(&G);
 
     /* set values in KBs */
     m_info->mem_total     = calc_kb(info.totalram, info.mem_unit);
@@ -108,6 +142,17 @@ static int mem_calc(struct flb_in_mem_info *m_info)
     m_info->mem_free      = calc_kb(info.freeram, info.mem_unit);
 
     m_info->mem_used      = m_info->mem_total - m_info->mem_free;
+    m_info->mem_buffer    = calc_kb(info.bufferram, info.mem_unit);
+    m_info->mem_cache     = G.cached_kb + G.reclaimable_kb;
+    if (ret) {
+        m_info->mem_available = G.available_kb;
+    }
+    else {
+        /* On kernels < 3.14, MemAvailable is not provided.
+         * Show alternate, more meaningful busy/free numbers by counting
+         * the whole buffer cache as available memory. */
+        m_info->mem_available = m_info->mem_cache + info.freeram;
+    };
 
     m_info->swap_total    = calc_kb(info.totalswap, info.mem_unit);
     m_info->swap_free     = calc_kb(info.freeswap, info.mem_unit);
@@ -217,6 +262,15 @@ static int in_mem_collect(struct flb_input_instance *i_ins,
 
                 FLB_LOG_EVENT_CSTRING_VALUE("Mem.free"),
                 FLB_LOG_EVENT_UINT64_VALUE(info.mem_free),
+
+                FLB_LOG_EVENT_CSTRING_VALUE("Mem.available"),
+                FLB_LOG_EVENT_UINT64_VALUE(info.mem_available),
+
+                FLB_LOG_EVENT_CSTRING_VALUE("Mem.buffer"),
+                FLB_LOG_EVENT_UINT64_VALUE(info.mem_buffer),
+
+                FLB_LOG_EVENT_CSTRING_VALUE("Mem.cache"),
+                FLB_LOG_EVENT_UINT64_VALUE(info.mem_cache),
 
                 FLB_LOG_EVENT_CSTRING_VALUE("Swap.total"),
                 FLB_LOG_EVENT_UINT64_VALUE(info.swap_total),
