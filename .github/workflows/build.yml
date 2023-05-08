@@ -26,7 +26,6 @@ jobs:
           build-args: |
             BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ') \
             BUILD_VERSION=${{ steps.prepare.outputs.tag_name }} \
-            FLUENT_VERSION=1.9.2
 
       - name: Build project
         run: |
